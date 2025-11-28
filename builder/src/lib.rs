@@ -28,19 +28,22 @@ impl Field {
     fn from_raw(f: &syn::Field) -> syn::Result<Self> {
         let name = f.ident.clone();
         if name.is_none() {
-            return syn::Result::Err(Error::new(name.span(), "Invalid field name."));
+            return syn::Result::Err(syn::Error::new(name.span(), "Invalid field name."));
         }
         let name = name.unwrap();
         let ty = &f.ty;
         let optional = is_optional(ty);
-        let attr: Vec<syn::Result<String>> = f.attrs.iter().map(get_builder_attr).collect();
-        let (oks, errs): (Vec<_>, Vec<_>) = attr.iter().partition(|a| a.is_ok());
+        let attr: std::vec::Vec<syn::Result<std::string::String>> =
+            f.attrs.iter().map(get_builder_attr).collect();
+        let (oks, errs): (std::vec::Vec<_>, std::vec::Vec<_>) =
+            attr.iter().partition(|a| a.is_ok());
         if !errs.is_empty()
-            && let Some(Err(e)) = errs.first()
+            && let std::option::Option::Some(std::result::Result::Err(e)) = errs.first()
         {
             return syn::Result::Err(e.clone());
         }
-        let oks: Vec<&String> = oks.iter().filter_map(|o| o.as_ref().ok()).collect();
+        let oks: std::vec::Vec<&std::string::String> =
+            oks.iter().filter_map(|o| o.as_ref().ok()).collect();
         let repeated = !oks.is_empty() && is_repeated(ty);
         let repeated_name = oks.first().cloned();
         Ok(Field {
@@ -59,7 +62,7 @@ impl Field {
             let unwrapped_type = unwrap_option(&ty);
             quote! {
                  fn #name_ident(&mut self, arg: #unwrapped_type) -> &mut Self{
-                     self.#name_ident = Some(arg);
+                     self.#name_ident = std::option::Option::Some(arg);
                      self
                  }
             }
@@ -68,7 +71,7 @@ impl Field {
                 .repeated_name
                 .clone()
                 .expect("No valid function name provided.");
-            let fn_ident = Ident::new(fn_name, Span::call_site());
+            let fn_ident = proc_macro2::Ident::new(fn_name, proc_macro2::Span::call_site());
             let ty = unwrap_vec(&ty);
             quote! {
                 fn #fn_ident(&mut self, arg: #ty) -> &mut Self{
@@ -79,7 +82,7 @@ impl Field {
         } else {
             quote! {
                  fn #name_ident(&mut self, arg: #ty) -> &mut Self{
-                     self.#name_ident = Some(arg);
+                     self.#name_ident = std::option::Option::Some(arg);
                      self
                  }
             }
@@ -96,7 +99,7 @@ impl Field {
             }
         } else {
             quote! {
-                #name_ident: Option<#ty>,
+                #name_ident: std::option::Option<#ty>,
             }
         }
     }
@@ -105,7 +108,7 @@ impl Field {
         let name_ident = self.name.clone();
         if self.repeated {
             quote! {
-                #name_ident: vec![],
+                #name_ident: std::vec![],
             }
         } else {
             quote! {
@@ -324,7 +327,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_ident{
             #(#setters)*
 
-            fn build(&mut self) -> Result<#struct_ident, Box<dyn std::error::Error>>{
+            fn build(&mut self) -> std::result::Result<#struct_ident, std::boxed::Box<dyn std::error::Error>>{
                 Ok(#struct_ident{
                     #(#finalisers)*
                 })
