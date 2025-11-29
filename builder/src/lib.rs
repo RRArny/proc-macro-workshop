@@ -33,7 +33,7 @@ impl Field {
         }
         let ty = &f.ty;
         let attr: std::vec::Vec<Result<std::string::String>> =
-            f.attrs.iter().map(get_builder_attr).collect();
+            f.attrs.iter().map(Field::get_builder_attr).collect();
         let (oks, errs): (std::vec::Vec<_>, std::vec::Vec<_>) =
             attr.iter().partition(|a| a.is_ok());
         if !errs.is_empty()
@@ -48,8 +48,8 @@ impl Field {
         Ok(Field {
             name: name.unwrap(),
             ty: ty.clone(),
-            optional: is_optional(ty),
-            repeated: !oks.is_empty() && is_repeated(ty),
+            optional: has_outer_type("Option", ty),
+            repeated: !oks.is_empty() && has_outer_type("Vec", ty),
             repeated_name: repeated_name.cloned(),
         })
     }
@@ -136,6 +136,40 @@ impl Field {
             }
         }
     }
+
+    fn get_builder_attr(a: &Attribute) -> Result<String> {
+        let err: Result<String> = Err(Error::new(a.span(), "expected `builder(each = \"...\")`"));
+        if a.style != AttrStyle::Outer {
+            return err;
+        }
+        match &a.meta {
+            syn::Meta::List(meta_list)
+                if !meta_list.path.segments.is_empty() && meta_list.path.is_ident("builder") =>
+            {
+                let ba: Result<BuilderAttrs> = meta_list.parse_args();
+                match ba {
+                    Ok(ba) => {
+                        if ba.each != "each" || !matches!(ba.name, Lit::Str(_)) {
+                            return Err(syn::Error::new(
+                                meta_list.span(),
+                                "expected `builder(each = \"...\")`",
+                            ));
+                        }
+                        if let Lit::Str(s) = ba.name
+                            && !s.value().is_empty()
+                        {
+                            return Ok(s.value());
+                        }
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+                err
+            }
+            _ => err,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,14 +209,6 @@ impl TryFrom<DeriveInput> for StructRepr {
     }
 }
 
-fn is_optional(ty: &Type) -> bool {
-    has_outer_type("Option", ty)
-}
-
-fn is_repeated(ty: &Type) -> bool {
-    has_outer_type("Vec", ty)
-}
-
 #[derive(Debug, Clone)]
 struct BuilderAttrs {
     each: Ident,
@@ -200,44 +226,12 @@ impl syn::parse::Parse for BuilderAttrs {
     }
 }
 
-fn get_builder_attr(a: &Attribute) -> Result<String> {
-    let err: Result<String> = Err(Error::new(a.span(), "expected `builder(each = \"...\")`"));
-    if a.style != AttrStyle::Outer {
-        return err;
-    }
-    match &a.meta {
-        syn::Meta::List(meta_list)
-            if !meta_list.path.segments.is_empty() && meta_list.path.is_ident("builder") =>
-        {
-            let ba: Result<BuilderAttrs> = meta_list.parse_args();
-            match ba {
-                Ok(ba) => {
-                    if ba.each != "each" || !matches!(ba.name, Lit::Str(_)) {
-                        return Err(syn::Error::new(
-                            meta_list.span(),
-                            "expected `builder(each = \"...\")`",
-                        ));
-                    }
-                    if let Lit::Str(s) = ba.name {
-                        return Ok(s.value());
-                    }
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-            }
-            err
-        }
-        _ => err,
-    }
-}
-
 fn has_outer_type(outer: &str, ty: &Type) -> bool {
     matches!(ty, syn::Type::Path(TypePath { qself: _, path }) if !path.segments.is_empty() && path.segments[0].ident == outer)
 }
 
 fn unwrap_option(ty: &Type) -> Option<Type> {
-    if !is_optional(ty) {
+    if !has_outer_type("Option", ty) {
         return None;
     }
 
@@ -270,7 +264,7 @@ fn unwrap_option(ty: &Type) -> Option<Type> {
 }
 
 fn unwrap_vec(ty: &Type) -> Option<Type> {
-    if !is_repeated(ty) {
+    if !has_outer_type("Vec", ty) {
         return None;
     }
 
@@ -286,14 +280,10 @@ fn unwrap_vec(ty: &Type) -> Option<Type> {
                 lt_token: _,
                 gt_token: _,
             }) = segment.arguments
+                && !args.is_empty()
+                && let Some(GenericArgument::Type(ty)) = args.first()
             {
-                if args.is_empty() {
-                    return None;
-                }
-                if let Some(GenericArgument::Type(ty)) = args.first() {
-                    return Some(ty.clone());
-                }
-                None
+                Some(ty.clone())
             } else {
                 None
             }
@@ -315,11 +305,8 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let builder_ident = Ident::new(&builder_type_name, Span::call_site());
 
     let builder_fields: Vec<TokenStream> = structrep.fields.iter().map(|f| f.builder()).collect();
-
     let setters: Vec<TokenStream> = structrep.fields.iter().map(|f| f.setter()).collect();
-
     let initialisers: Vec<TokenStream> = structrep.fields.iter().map(|f| f.init()).collect();
-
     let finalisers: Vec<TokenStream> = structrep.fields.iter().map(|f| f.finaliser()).collect();
 
     quote! {
