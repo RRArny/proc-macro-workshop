@@ -1,0 +1,5 @@
+error: expected `=`
+ --> tests/10-missing-equals.rs:6:21
+  |
+6 |     #[builder(each  "arg")]
+  |                     ^^^^^

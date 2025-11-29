@@ -1,0 +1,5 @@
+error: expected `builder(each = "...")`
+ --> tests/11-missing-attr-literal.rs:6:5
+  |
+6 |     #[builder(each = "")]
+  |     ^^^^^^^^^^^^^^^^^^^^^
