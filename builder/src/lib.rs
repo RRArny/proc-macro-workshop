@@ -1,5 +1,5 @@
-use proc_macro::TokenStream;
 use proc_macro2::Span;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::AngleBracketedGenericArguments;
 use syn::AttrStyle;
@@ -9,6 +9,7 @@ use syn::Error;
 use syn::GenericArgument;
 use syn::Ident;
 use syn::Lit;
+use syn::Result;
 use syn::Token;
 use syn::Type;
 use syn::TypePath;
@@ -25,37 +26,35 @@ struct Field {
 }
 
 impl Field {
-    fn from_raw(f: &syn::Field) -> syn::Result<Self> {
+    fn from_raw(f: &syn::Field) -> Result<Self> {
         let name = f.ident.clone();
         if name.is_none() {
-            return syn::Result::Err(syn::Error::new(name.span(), "Invalid field name."));
+            return Result::Err(syn::Error::new(name.span(), "Invalid field name."));
         }
-        let name = name.unwrap();
         let ty = &f.ty;
-        let optional = is_optional(ty);
-        let attr: std::vec::Vec<syn::Result<std::string::String>> =
+        let attr: std::vec::Vec<Result<std::string::String>> =
             f.attrs.iter().map(get_builder_attr).collect();
         let (oks, errs): (std::vec::Vec<_>, std::vec::Vec<_>) =
             attr.iter().partition(|a| a.is_ok());
         if !errs.is_empty()
             && let std::option::Option::Some(std::result::Result::Err(e)) = errs.first()
         {
-            return syn::Result::Err(e.clone());
+            return Result::Err(e.clone());
         }
         let oks: std::vec::Vec<&std::string::String> =
             oks.iter().filter_map(|o| o.as_ref().ok()).collect();
-        let repeated = !oks.is_empty() && is_repeated(ty);
+
         let repeated_name = oks.first().cloned();
         Ok(Field {
-            name,
+            name: name.unwrap(),
             ty: ty.clone(),
-            optional,
-            repeated,
+            optional: is_optional(ty),
+            repeated: !oks.is_empty() && is_repeated(ty),
             repeated_name: repeated_name.cloned(),
         })
     }
 
-    fn setter(&self) -> proc_macro2::TokenStream {
+    fn setter(&self) -> TokenStream {
         let name_ident = self.name.clone();
         let ty = self.ty.clone();
         if self.optional {
@@ -67,17 +66,24 @@ impl Field {
                  }
             }
         } else if self.repeated {
-            let fn_name = &self
-                .repeated_name
-                .clone()
-                .expect("No valid function name provided.");
-            let fn_ident = proc_macro2::Ident::new(fn_name, proc_macro2::Span::call_site());
-            let ty = unwrap_vec(&ty);
-            quote! {
-                fn #fn_ident(&mut self, arg: #ty) -> &mut Self{
-                    self.#name_ident.push(arg);
-                    self
+            let fn_name = &self.repeated_name.clone();
+
+            match fn_name {
+                Some(fn_name) => {
+                    let fn_ident = proc_macro2::Ident::new(fn_name, proc_macro2::Span::call_site());
+                    let ty = unwrap_vec(&ty);
+                    quote! {
+                        fn #fn_ident(&mut self, arg: #ty) -> &mut Self{
+                            self.#name_ident.push(arg);
+                            self
+                        }
+                    }
                 }
+                None => syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    "No valid function name provided.",
+                )
+                .into_compile_error(),
             }
         } else {
             quote! {
@@ -89,7 +95,7 @@ impl Field {
         }
     }
 
-    fn builder(&self) -> proc_macro2::TokenStream {
+    fn builder(&self) -> TokenStream {
         let name_ident = self.name.clone();
         let ty = self.ty.clone();
 
@@ -104,7 +110,7 @@ impl Field {
         }
     }
 
-    fn init(&self) -> proc_macro2::TokenStream {
+    fn init(&self) -> TokenStream {
         let name_ident = self.name.clone();
         if self.repeated {
             quote! {
@@ -117,7 +123,7 @@ impl Field {
         }
     }
 
-    fn finaliser(&self) -> proc_macro2::TokenStream {
+    fn finaliser(&self) -> TokenStream {
         let name_ident = self.name.clone();
         let error_message = format!("missing parameter: {}", name_ident);
         if self.optional || self.repeated {
@@ -145,7 +151,7 @@ impl TryFrom<DeriveInput> for StructRepr {
         let name = value.ident.clone();
         match value.data.clone() {
             syn::Data::Struct(data_struct) => {
-                let fields: Vec<syn::Result<Field>> = data_struct
+                let fields: Vec<Result<Field>> = data_struct
                     .fields
                     .into_iter()
                     .map(|f| Field::from_raw(&f))
@@ -185,7 +191,7 @@ struct BuilderAttrs {
 }
 
 impl syn::parse::Parse for BuilderAttrs {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    fn parse(input: syn::parse::ParseStream) -> Result<Self> {
         Ok(Self {
             each: input.parse()?,
             _equals: input.parse()?,
@@ -194,15 +200,16 @@ impl syn::parse::Parse for BuilderAttrs {
     }
 }
 
-fn get_builder_attr(a: &Attribute) -> syn::Result<String> {
+fn get_builder_attr(a: &Attribute) -> Result<String> {
+    let err: Result<String> = Err(Error::new(a.span(), "expected `builder(each = \"...\")`"));
     if a.style != AttrStyle::Outer {
-        return Err(Error::new(a.span(), ""));
+        return err;
     }
     match &a.meta {
         syn::Meta::List(meta_list)
             if !meta_list.path.segments.is_empty() && meta_list.path.is_ident("builder") =>
         {
-            let ba: syn::Result<BuilderAttrs> = meta_list.parse_args();
+            let ba: Result<BuilderAttrs> = meta_list.parse_args();
             match ba {
                 Ok(ba) => {
                     if ba.each != "each" || !matches!(ba.name, Lit::Str(_)) {
@@ -219,9 +226,9 @@ fn get_builder_attr(a: &Attribute) -> syn::Result<String> {
                     return Err(e);
                 }
             }
-            Err(Error::new(a.span(), ""))
+            err
         }
-        _ => Err(Error::new(a.span(), "")),
+        _ => err,
     }
 }
 
@@ -296,7 +303,7 @@ fn unwrap_vec(ty: &Type) -> Option<Type> {
 }
 
 #[proc_macro_derive(Builder, attributes(builder))]
-pub fn derive(input: TokenStream) -> TokenStream {
+pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let structrep = StructRepr::try_from(input);
     if let std::result::Result::Err(e) = structrep {
@@ -307,17 +314,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let builder_type_name = format! {"{struct_ident}Builder"};
     let builder_ident = Ident::new(&builder_type_name, Span::call_site());
 
-    let builder_fields: Vec<proc_macro2::TokenStream> =
-        structrep.fields.iter().map(|f| f.builder()).collect();
+    let builder_fields: Vec<TokenStream> = structrep.fields.iter().map(|f| f.builder()).collect();
 
-    let setters: Vec<proc_macro2::TokenStream> =
-        structrep.fields.iter().map(|f| f.setter()).collect();
+    let setters: Vec<TokenStream> = structrep.fields.iter().map(|f| f.setter()).collect();
 
-    let initialisers: Vec<proc_macro2::TokenStream> =
-        structrep.fields.iter().map(|f| f.init()).collect();
+    let initialisers: Vec<TokenStream> = structrep.fields.iter().map(|f| f.init()).collect();
 
-    let finalisers: Vec<proc_macro2::TokenStream> =
-        structrep.fields.iter().map(|f| f.finaliser()).collect();
+    let finalisers: Vec<TokenStream> = structrep.fields.iter().map(|f| f.finaliser()).collect();
 
     quote! {
         pub struct #builder_ident{
